@@ -7,6 +7,9 @@ class observer {
     /** @var array Track sent completion emails to prevent duplicates in the same request */
     protected static $sentnotifications = [];
 
+    /** @var array Track sent recommendation emails to prevent duplicates */
+    protected static $sentrecommendations = [];
+
     public static function user_enrolled(\core\event\user_enrolment_created $event) {
         global $DB;
 
@@ -56,6 +59,9 @@ class observer {
 
         // Notify teachers
         self::notify_teachers($user, $course);
+
+        // Send recommendations
+        self::send_recommendations($user, $course);
     }
 
     public static function module_completed(\core\event\course_module_completion_updated $event) {
@@ -103,7 +109,6 @@ class observer {
 
         $context = \context_course::instance($course->id);
         
-        // Get roles that we consider "Teachers"
         $teacherroles = $DB->get_records_list('role', 'shortname', ['editingteacher', 'teacher'], '', 'id');
         if (empty($teacherroles)) {
             return;
@@ -121,6 +126,35 @@ class observer {
                     "Hi {$teacher->firstname},\n\nA student ({$student->firstname} {$student->lastname}) has successfully completed your course: {$course->fullname}."
                 );
             }
+        }
+    }
+
+    /**
+     * Send course recommendations to the user.
+     */
+    protected static function send_recommendations($user, $course) {
+        $userid = $user->id;
+        $courseid = $course->id;
+
+        // Prevent duplicates
+        if (!empty(self::$sentrecommendations["{$userid}_{$courseid}"])) {
+            return;
+        }
+
+        error_log("Automation plugin: Checking recommendations for User {$userid} after completing Course {$courseid}");
+
+        try {
+            $recommendations = \local_automation\utils::get_next_recommended_courses($courseid, $userid);
+
+            if (!empty($recommendations)) {
+                \local_automation\utils::send_recommendation_email($user, $recommendations);
+                self::$sentrecommendations["{$userid}_{$courseid}"] = true;
+                error_log("Automation plugin: Sent recommendation email to User {$userid}");
+            } else {
+                error_log("Automation plugin: No next course found for User {$userid} in path.");
+            }
+        } catch (\Exception $e) {
+            error_log("Automation plugin: Error fetching recommendations: " . $e->getMessage());
         }
     }
 
